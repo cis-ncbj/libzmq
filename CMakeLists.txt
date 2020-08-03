@@ -1,4 +1,10 @@
 # CMake build script for ZeroMQ
+include("cmake/HunterGate.cmake")
+HunterGate(
+    URL "https://github.com/cis-ncbj/hunter/archive/v0.23.263-cis.zip"
+    SHA1 "5255acd8268f67f9b03bc4c3c4851d13defafd94"
+)
+
 project(ZeroMQ)
 
 if(${CMAKE_SYSTEM_NAME} STREQUAL Darwin)
@@ -6,6 +12,7 @@ if(${CMAKE_SYSTEM_NAME} STREQUAL Darwin)
 else()
   cmake_minimum_required(VERSION 2.8.12)
 endif()
+
 
 include(CheckIncludeFiles)
 include(CheckCCompilerFlag)
@@ -102,10 +109,11 @@ option(ENABLE_CURVE "Enable CURVE security" ON)
 if(NOT ENABLE_CURVE)
   message(STATUS "CURVE security is disabled")
 elseif(WITH_LIBSODIUM)
-  find_package(Sodium)
+  hunter_add_package(libsodium)
+  find_package(libsodium CONFIG REQUIRED)
+  set(SODIUM_FOUND ${libsodium_FOUND})
   if(SODIUM_FOUND)
     message(STATUS "Using libsodium for CURVE security")
-    include_directories(${SODIUM_INCLUDE_DIRS})
     set(ZMQ_USE_LIBSODIUM 1)
     set(ZMQ_HAVE_CURVE 1)
   else()
@@ -121,11 +129,7 @@ endif()
 
 set(SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 
-if(EXISTS "${SOURCE_DIR}/.git")
-  option(ENABLE_DRAFTS "Build and install draft classes and methods" ON)
-else()
-  option(ENABLE_DRAFTS "Build and install draft classes and methods" OFF)
-endif()
+option(ENABLE_DRAFTS "Build and install draft classes and methods" OFF)
 if(ENABLE_DRAFTS)
   option (ENABLE_RADIX_TREE "Use radix tree implementation to manage subscriptions" ON)
   add_definitions(-DZMQ_BUILD_DRAFT_API)
@@ -1024,7 +1028,7 @@ if(MSVC)
     DEPENDS ${nsis-template})
 endif()
 
-option (WITH_DOCS "Build html docs" ON)
+option (WITH_DOCS "Build html docs" OFF)
 if (WITH_DOCS)
   file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/doc)
   file(GLOB docs RELATIVE ${CMAKE_CURRENT_BINARY_DIR}/ "${CMAKE_CURRENT_SOURCE_DIR}/doc/*.txt")
@@ -1081,8 +1085,10 @@ endif()
 
 #-----------------------------------------------------------------------------
 # output
-option(BUILD_SHARED "Whether or not to build the shared object"  ON)
-option(BUILD_STATIC "Whether or not to build the static archive" ON)
+cmake_dependent_option(BUILD_SHARED "Whether or not to build the shared object"  ON
+	               "BUILD_SHARED_LIBS" OFF)
+cmake_dependent_option(BUILD_STATIC "Whether or not to build the static archive" ON
+	               "NOT BUILD_SHARED_LIBS" OFF)
 
 list(APPEND target_outputs "")
 
@@ -1144,6 +1150,9 @@ else()
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
       $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
       $<INSTALL_INTERFACE:include>)
+    if(SODIUM_FOUND)
+      target_link_libraries(objects PkgConfig::libsodium)
+    endif()
   endif()
 
   if(BUILD_SHARED)
@@ -1184,7 +1193,7 @@ else()
         ${html-docs} ${readme-docs} ${zmq-pkgconfig} ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
     endif()
     if(CMAKE_SYSTEM_NAME MATCHES "QNX")
-      target_link_libraries(libzmq-static m)
+      target_link_libraries(libzmq-static PUBLIC m)
     endif()
     set_target_properties(libzmq-static PROPERTIES
       PUBLIC_HEADER "${public_headers}"
@@ -1210,7 +1219,7 @@ if(BUILD_SHARED)
   target_link_libraries(libzmq ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
 
   if(SODIUM_FOUND)
-    target_link_libraries(libzmq ${SODIUM_LIBRARIES})
+    target_link_libraries(libzmq PkgConfig::libsodium)
     # On Solaris, libsodium depends on libssp
     if(${CMAKE_SYSTEM_NAME} MATCHES "SunOS")
       target_link_libraries(libzmq ssp)
@@ -1237,32 +1246,32 @@ if(BUILD_SHARED)
 endif()
 
 if(BUILD_STATIC)
-  target_link_libraries(libzmq-static ${OPTIONAL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
+    target_link_libraries(libzmq-static PRIVATE ${OPTIONAL_LIBRARIES} PUBLIC ${CMAKE_THREAD_LIBS_INIT})
 
   if(SODIUM_FOUND)
-    target_link_libraries(libzmq-static ${SODIUM_LIBRARIES})
+      target_link_libraries(libzmq-static PRIVATE PkgConfig::libsodium)
     # On Solaris, libsodium depends on libssp
     if(${CMAKE_SYSTEM_NAME} MATCHES "SunOS")
-      target_link_libraries(libzmq-static ssp)
+      target_link_libraries(libzmq-static PUBLIC ssp)
     endif()
   endif()
 
   if(HAVE_WS2_32)
-    target_link_libraries(libzmq-static ws2_32)
+    target_link_libraries(libzmq-static PUBLIC ws2_32)
   elseif(HAVE_WS2)
-    target_link_libraries(libzmq-static ws2)
+    target_link_libraries(libzmq-static PUBLIC ws2)
   endif()
 
   if(HAVE_RPCRT4)
-    target_link_libraries(libzmq-static rpcrt4)
+    target_link_libraries(libzmq-static PUBLIC rpcrt4)
   endif()
 
   if(HAVE_IPHLAPI)
-    target_link_libraries(libzmq-static iphlpapi)
+    target_link_libraries(libzmq-static PUBLIC iphlpapi)
   endif()
 
   if(RT_LIBRARY)
-    target_link_libraries(libzmq-static -lrt)
+    target_link_libraries(libzmq-static PUBLIC -lrt)
   endif()
 
   if(CMAKE_SYSTEM_NAME MATCHES "QNX")
@@ -1340,6 +1349,8 @@ endif()
 #-----------------------------------------------------------------------------
 # installer
 
+set(ZMQ_NAMESPACE "${PROJECT_NAME}::")
+
 if(MSVC AND(BUILD_SHARED OR BUILD_STATIC))
   install(TARGETS ${target_outputs}
     EXPORT ${PROJECT_NAME}-targets
@@ -1402,6 +1413,7 @@ endif()
 
 if((NOT CMAKE_VERSION VERSION_LESS 3.0) AND (BUILD_SHARED OR BUILD_STATIC))
   export(EXPORT ${PROJECT_NAME}-targets
+    NAMESPACE ${ZMQ_NAMESPACE}
     FILE "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Targets.cmake")
 endif()
 configure_package_config_file(builds/cmake/${PROJECT_NAME}Config.cmake.in
@@ -1412,6 +1424,7 @@ write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Conf
   COMPATIBILITY AnyNewerVersion)
 if(BUILD_SHARED OR BUILD_STATIC)
   install(EXPORT ${PROJECT_NAME}-targets
+    NAMESPACE ${ZMQ_NAMESPACE}
     FILE ${PROJECT_NAME}Targets.cmake
     DESTINATION ${ZEROMQ_CMAKECONFIG_INSTALL_DIR})
   install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake
